@@ -5,6 +5,13 @@ const WIDTH = 450
 const HEIGHT = 800
 const WORLD_WIDTH = 1200
 const WORLD_HEIGHT = 1700
+const CHARACTER_ATLAS_KEY = 'kenney-characters'
+const CHARACTER_ATLAS_IMAGE = 'kenney_top-down-shooter/Spritesheet/spritesheet_characters.png'
+const CHARACTER_ATLAS_XML = 'kenney_top-down-shooter/Spritesheet/spritesheet_characters.xml'
+const DIRECTION_COUNT = 8
+const DIRECTION_STEP = (Math.PI * 2) / DIRECTION_COUNT
+const DIRECTION_ROTATION_SPEED = 12
+const FACE_DOWN_ROTATION = Math.PI / 2
 const SAFE_ZONE = {
   left: 255,
   top: 70,
@@ -105,6 +112,13 @@ class GameScene extends Phaser.Scene {
     super('GameScene')
   }
 
+  preload() {
+    this.load.atlasXML(CHARACTER_ATLAS_KEY, CHARACTER_ATLAS_IMAGE, CHARACTER_ATLAS_XML)
+    this.load.image('cook', 'assets/cook.png')
+    this.load.image('sell', 'assets/sell.png')
+    this.load.image('up', 'assets/up.png')
+  }
+
   create() {
     this.hp = PLAYER_MAX_HP
     this.maxHp = PLAYER_MAX_HP
@@ -144,6 +158,7 @@ class GameScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
 
     this.drawArena()
+    this.characterFrames = this.createCharacterFrameMaps()
 
     this.enemies = []
     this.companions = []
@@ -167,9 +182,18 @@ class GameScene extends Phaser.Scene {
     this.createCompanionBeacon()
     this.createRangedBeacon()
 
-    this.player = this.add.circle((SAFE_ZONE.left + SAFE_ZONE.right) / 2, 430, 16, 0x111111)
-    this.player.setStrokeStyle(4, 0xffffff)
+    this.player = this.add.image(
+      (SAFE_ZONE.left + SAFE_ZONE.right) / 2,
+      430,
+      CHARACTER_ATLAS_KEY,
+      this.characterFrames.player.defaultFrame,
+    )
+    this.player.characterFrameMap = this.characterFrames.player
+    this.player.setDisplaySize(37, 43)
+    this.player.radius = 16
     this.player.setDepth(5)
+    this.applyDirectionalSprite(this.player, new Phaser.Math.Vector2(0, 1), 1)
+    this.attachCharacterShadow(this.player, 32, 10, 12, 4)
     this.player.healthBar = this.createHealthBar(this.player, this.maxHp)
     this.refreshCarriedStacks()
     this.refreshCookStacks()
@@ -267,7 +291,129 @@ class GameScene extends Phaser.Scene {
     this.updateSellCoinPickup(delta)
     this.updateNpcPrompt()
     this.updateHealthBar(this.player, this.hp, this.maxHp)
+    this.updateCharacterShadow(this.player)
     this.updateCarriedStacks()
+  }
+
+  createCharacterShadow(target, width, height, yOffset, depth = 0) {
+    const shadow = this.add.ellipse(target.x, target.y + yOffset, width, height, 0x111111, 0.18)
+    shadow.setDepth(depth)
+    return shadow
+  }
+
+  createCharacterFrameMaps() {
+    const frameNames = this.textures.get(CHARACTER_ATLAS_KEY).getFrameNames()
+
+    return {
+      player: this.createDirectionalFrameMap(frameNames, ['survivor1'], 'hold'),
+      enemy: this.createDirectionalFrameMap(frameNames, ['zombie1', 'zoimbie1'], 'hold'),
+      soldier: this.createDirectionalFrameMap(frameNames, ['soldier1'], 'hold'),
+    }
+  }
+
+  createDirectionalFrameMap(frameNames, characterNames, preferredPose) {
+    const framesByPose = {}
+
+    for (const characterName of characterNames) {
+      for (const frameName of frameNames) {
+        const match = frameName.match(new RegExp(`^${characterName}_(.+)\\.png$`, 'i'))
+
+        if (!match) {
+          continue
+        }
+
+        framesByPose[match[1].toLowerCase()] = frameName
+      }
+    }
+
+    const defaultFrame = framesByPose[preferredPose]
+      || framesByPose.stand
+      || framesByPose.gun
+      || Object.values(framesByPose)[0]
+
+    if (!defaultFrame) {
+      throw new Error(`Missing Kenney character frame: ${characterNames.join(', ')}`)
+    }
+
+    return {
+      defaultFrame,
+      frames: {
+        right: defaultFrame,
+        downRight: defaultFrame,
+        down: defaultFrame,
+        downLeft: defaultFrame,
+        left: defaultFrame,
+        upLeft: defaultFrame,
+        up: defaultFrame,
+        upRight: defaultFrame,
+      },
+      poses: framesByPose,
+    }
+  }
+
+  applyDirectionalSprite(target, direction, dt) {
+    if (!target.characterFrameMap || direction.lengthSq() === 0) {
+      return
+    }
+
+    const directionName = this.getDirectionName(direction)
+    const targetAngle = this.getDirectionAngle(direction)
+    const frame = target.characterFrameMap.frames[directionName]
+
+    if (frame && target.frame.name !== frame) {
+      target.setFrame(frame)
+    }
+
+    target.rotation = Phaser.Math.Angle.RotateTo(
+      target.rotation,
+      targetAngle,
+      DIRECTION_ROTATION_SPEED * dt,
+    )
+  }
+
+  getDirectionName(direction) {
+    const index = this.getDirectionIndex(direction)
+    return [
+      'right',
+      'downRight',
+      'down',
+      'downLeft',
+      'left',
+      'upLeft',
+      'up',
+      'upRight',
+    ][index]
+  }
+
+  getDirectionAngle(direction) {
+    return this.getDirectionIndex(direction) * DIRECTION_STEP
+  }
+
+  getDirectionIndex(direction) {
+    const angle = Phaser.Math.Angle.Normalize(Math.atan2(direction.y, direction.x))
+    return Math.round(angle / DIRECTION_STEP) % DIRECTION_COUNT
+  }
+
+  updateCharacterShadow(target) {
+    if (!target.shadow) {
+      return
+    }
+
+    target.shadow.setPosition(target.x, target.y + target.shadowYOffset)
+  }
+
+  attachCharacterShadow(target, width, height, yOffset, depth = 0) {
+    target.shadowYOffset = yOffset
+    target.shadow = this.createCharacterShadow(target, width, height, yOffset, depth)
+  }
+
+  destroyCharacterShadow(target) {
+    if (!target.shadow) {
+      return
+    }
+
+    target.shadow.destroy()
+    target.shadow = null
   }
 
   drawArena() {
@@ -349,9 +495,11 @@ class GameScene extends Phaser.Scene {
   }
 
   createMerchant() {
-    this.add.circle(MERCHANT.x, MERCHANT.y + 7, 24, 0xd7b36a, 0.28)
-    this.merchant = this.add.circle(MERCHANT.x, MERCHANT.y, 18, 0x3c7dd9)
-    this.merchant.setStrokeStyle(4, 0xffffff)
+    this.merchant = this.add.image(MERCHANT.x, MERCHANT.y, 'up')
+    this.merchant.setDisplaySize(36, 36)
+    this.merchant.setRotation(FACE_DOWN_ROTATION)
+    this.merchant.setDepth(5)
+    this.attachCharacterShadow(this.merchant, 34, 11, 13, 4)
     this.merchant.setInteractive({ useHandCursor: true })
 
     this.add.rectangle(MERCHANT.x, MERCHANT.y - 25, 42, 18, 0xffffff, 0.96)
@@ -368,9 +516,11 @@ class GameScene extends Phaser.Scene {
   }
 
   createCookNpc() {
-    this.add.circle(COOK_NPC.x, COOK_NPC.y + 7, 24, 0xd7b36a, 0.28)
-    this.cookNpc = this.add.circle(COOK_NPC.x, COOK_NPC.y, 18, 0xc76d2a)
-    this.cookNpc.setStrokeStyle(4, 0xffffff)
+    this.cookNpc = this.add.image(COOK_NPC.x, COOK_NPC.y, 'cook')
+    this.cookNpc.setDisplaySize(36, 36)
+    this.cookNpc.setRotation(FACE_DOWN_ROTATION)
+    this.cookNpc.setDepth(5)
+    this.attachCharacterShadow(this.cookNpc, 34, 11, 13, 4)
     this.cookNpc.setInteractive({ useHandCursor: true })
 
     this.add.rectangle(COOK_NPC.x, COOK_NPC.y - 25, 54, 18, 0xffffff, 0.96)
@@ -387,9 +537,11 @@ class GameScene extends Phaser.Scene {
   }
 
   createTraderNpc() {
-    this.add.circle(TRADER_NPC.x, TRADER_NPC.y + 7, 24, 0xd7b36a, 0.28)
-    this.traderNpc = this.add.circle(TRADER_NPC.x, TRADER_NPC.y, 18, 0x37a56d)
-    this.traderNpc.setStrokeStyle(4, 0xffffff)
+    this.traderNpc = this.add.image(TRADER_NPC.x, TRADER_NPC.y, 'sell')
+    this.traderNpc.setDisplaySize(36, 36)
+    this.traderNpc.setRotation(FACE_DOWN_ROTATION)
+    this.traderNpc.setDepth(5)
+    this.attachCharacterShadow(this.traderNpc, 34, 11, 13, 4)
     this.traderNpc.setInteractive({ useHandCursor: true })
 
     this.add.rectangle(TRADER_NPC.x, TRADER_NPC.y - 25, 50, 18, 0xffffff, 0.96)
@@ -565,6 +717,7 @@ class GameScene extends Phaser.Scene {
 
     this.player.x = Phaser.Math.Clamp(this.player.x, 30, WORLD_WIDTH - 30)
     this.player.y = Phaser.Math.Clamp(this.player.y, 80, WORLD_HEIGHT - 40)
+    this.applyDirectionalSprite(this.player, direction, dt)
   }
 
   resolveFenceCollision(previousX, previousY) {
@@ -655,8 +808,13 @@ class GameScene extends Phaser.Scene {
   spawnEnemyAtSlot(slot) {
     const x = slot.x + Phaser.Math.Between(-10, 10)
     const y = slot.y + Phaser.Math.Between(-10, 10)
-    const enemy = this.add.circle(x, y, 14, 0xffffff)
-    enemy.setStrokeStyle(3, 0xe33b3b)
+    const enemy = this.add.image(x, y, CHARACTER_ATLAS_KEY, this.characterFrames.enemy.defaultFrame)
+    enemy.characterFrameMap = this.characterFrames.enemy
+    enemy.setDisplaySize(35, 43)
+    enemy.radius = 14
+    enemy.setDepth(4)
+    this.applyDirectionalSprite(enemy, new Phaser.Math.Vector2(0, 1), 1)
+    this.attachCharacterShadow(enemy, 28, 9, 11, 3)
     enemy.hp = 2
     enemy.maxHp = 2
     enemy.damageCooldown = 0
@@ -699,6 +857,7 @@ class GameScene extends Phaser.Scene {
 
       enemy.x += direction.x * this.enemySpeed * dt
       enemy.y += direction.y * this.enemySpeed * dt
+      this.applyDirectionalSprite(enemy, direction, dt)
       enemy.damageCooldown -= dt
       this.updateHealthBar(enemy, enemy.hp, enemy.maxHp)
 
@@ -714,6 +873,10 @@ class GameScene extends Phaser.Scene {
     }
 
     this.separateEnemies()
+
+    for (const enemy of this.enemies) {
+      this.updateCharacterShadow(enemy)
+    }
   }
 
   separateEnemies() {
@@ -804,10 +967,10 @@ class GameScene extends Phaser.Scene {
       return
     }
 
-    nearestEnemy.setFillStyle(0xffeded)
+    nearestEnemy.setTint(0xffeded)
     this.time.delayedCall(80, () => {
       if (nearestEnemy.active) {
-        nearestEnemy.setFillStyle(0xffffff)
+        nearestEnemy.clearTint()
       }
     })
   }
@@ -878,10 +1041,10 @@ class GameScene extends Phaser.Scene {
           if (target.hp <= 0) {
             this.killEnemy(target)
           } else {
-            target.setFillStyle(0xe8f8ff)
+            target.setTint(0xe8f8ff)
             this.time.delayedCall(80, () => {
               if (target.active) {
-                target.setFillStyle(0xffffff)
+                target.clearTint()
               }
             })
           }
@@ -924,6 +1087,7 @@ class GameScene extends Phaser.Scene {
     const direction = new Phaser.Math.Vector2(targetX - companion.x, targetY - companion.y).normalize()
     companion.x += direction.x * COMPANION.speed * dt
     companion.y += direction.y * COMPANION.speed * dt
+    this.applyDirectionalSprite(companion.body, direction, dt)
     companion.x = Phaser.Math.Clamp(companion.x, 18, WORLD_WIDTH - 18)
     companion.y = Phaser.Math.Clamp(companion.y, 18, WORLD_HEIGHT - 18)
   }
@@ -1466,7 +1630,7 @@ class GameScene extends Phaser.Scene {
 
     this.coins -= RANGED_BEACON.cost
     this.hasRangedAttack = true
-    this.player.setStrokeStyle(4, 0x9b59b6)
+    this.player.setTint(0xd9b3ff)
     this.updateInventoryText()
     this.showFloatingText(RANGED_BEACON.x, RANGED_BEACON.y - 54, 'RANGED ON')
   }
@@ -1474,13 +1638,15 @@ class GameScene extends Phaser.Scene {
   createCompanion(x, y) {
     const companion = this.add.container(x, y)
     const shadow = this.add.ellipse(0, 11, 25, 8, 0x111111, 0.16)
-    const body = this.add.circle(0, 0, 13, 0x4fc3ff)
-    body.setStrokeStyle(3, 0xffffff)
-    const face = this.add.circle(3, -3, 4, 0xe9fbff)
+    const body = this.add.image(0, 0, CHARACTER_ATLAS_KEY, this.characterFrames.soldier.defaultFrame)
+    body.characterFrameMap = this.characterFrames.soldier
+    body.setDisplaySize(38, 43)
+    this.applyDirectionalSprite(body, new Phaser.Math.Vector2(0, 1), 1)
     const weapon = this.add.rectangle(15, -1, 18, 5, 0x2f5572)
     weapon.setStrokeStyle(1, 0xffffff, 0.8)
 
-    companion.add([shadow, body, face, weapon])
+    companion.add([shadow, body, weapon])
+    companion.body = body
     companion.setDepth(5)
     companion.attackCooldown = Phaser.Math.Between(0, COMPANION.attackRate)
     this.companions.push(companion)
@@ -1866,6 +2032,7 @@ class GameScene extends Phaser.Scene {
     }
 
     this.destroyHealthBar(enemy)
+    this.destroyCharacterShadow(enemy)
     enemy.destroy()
   }
 
@@ -1927,6 +2094,7 @@ class GameScene extends Phaser.Scene {
 
     for (const enemy of this.enemies) {
       this.destroyHealthBar(enemy)
+      this.destroyCharacterShadow(enemy)
       enemy.destroy()
     }
 
